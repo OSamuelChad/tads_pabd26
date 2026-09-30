@@ -209,3 +209,142 @@ execute function prevent_customer_del();
 
 -- Teste
 delete from customer where customer_id = 1;
+
+-- ==================================================
+-- Exemplo 6 - AFTER DELETE
+-- ==================================================
+
+-- Arquivo de funcionários devolvidos ao mercado de trabalho
+drop table if exists funcionario_archive;
+create table funcionario_archive (
+    cpf char(11) primary key,
+    nome varchar(100) not null,
+    salario numeric(7,2) not null,
+    deleted_at timestamptz default now()
+);
+
+create or replace function archive_deleted_funcionario()
+    returns trigger
+    language plpgsql
+as $$
+begin
+    insert into funcionario_archive (cpf, nome, salario)
+    values (OLD.cpf, OLD.pnome || ' ' || OLD.unome, OLD.salario);
+
+    return old;
+end;
+$$;
+
+drop trigger if exists trg_archive_deleted_funcionario on funcionario;
+create trigger trg_archive_deleted_funcionario
+after delete on funcionario
+for each row
+execute function archive_deleted_funcionario();
+
+-- Teste
+delete from funcionario where cpf = '33344455566';
+select cpf, nome, salario, deleted_at at time zone 'America/Fortaleza' from funcionario_archive;
+
+-- ==================================================
+-- Exemplo 7 - INSTEAD OF
+-- ==================================================
+
+drop view if exists customer_summary;
+create view customer_summary as
+select 
+    c.customer_id,
+    c.first_name,
+    c.last_name,
+    cs.total
+from customer c
+join customer_spending cs on cs.customer_id = c.customer_id;
+
+create or replace function update_customer_summary()
+    returns trigger
+    language plpgsql
+as $$
+begin
+    if TG_OP = 'UPDATE' then
+        update customer
+        set first_name = NEW.first_name,
+            last_name = NEW.last_name
+        where customer_id = NEW.customer_id;    
+    end if;
+
+    return null;
+end;
+$$;
+
+drop trigger if exists trg_update_customer_summary on customer_summary;
+create trigger trg_update_customer_summary
+instead of update on customer_summary
+for each row
+execute function update_customer_summary();
+
+-- Teste
+
+-- UPDATE de total não realizado
+update customer_summary
+set total = 1000
+where customer_id = 524;
+
+update customer_summary
+set first_name = 'Maria', last_name = 'Ferreira'
+where customer_id = 1;
+select * from customer_summary where customer_id = 1;
+
+-- ==================================================
+-- Exemplo 8 - BEFORE TRUNCATE
+-- ==================================================
+create or replace function truncate_departamento()
+    returns trigger
+    language plpgsql
+as $$
+begin
+    raise exception 'TRUNCATE na tabela departamento não é permitido!';
+end;
+$$;
+
+drop trigger if exists trg_truncate_departamento on departamento;
+create trigger trg_truncate_departamento
+before truncate on departamento
+for each statement
+execute function truncate_departamento();
+
+-- Teste
+truncate table departamento cascade;
+
+-- ==================================================
+-- Exemplo 9 - EVENT TRIGGER
+-- ==================================================
+
+-- Tabela audits para registrar todo comando DDL executado no banco
+create table audits (
+    id serial primary key,
+    username varchar(100) not null,
+    event varchar(50) not null,
+    command text not null,
+    executed_at timestamptz default now()
+);
+
+create or replace function audit_command()
+    returns event_trigger
+    language plpgsql
+as $$
+begin
+    insert into audits (username, event, command)
+    values (session_user, TG_EVENT, TG_TAG);
+end;
+$$;
+
+drop event trigger if exists etrg_audit_command;
+create event trigger etrg_audit_command
+on ddl_command_end
+execute function audit_command();
+
+create table exemplo (
+    id serial,
+    name text
+);
+
+select * from audits;
